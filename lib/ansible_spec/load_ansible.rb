@@ -356,6 +356,27 @@ module AnsibleSpec
     return vars
   end
 
+  # param: variable hash
+  def resolve_include_statements(hash)
+    if hash.class == Hash
+      hash.each do |key, value|
+        if value.class == String
+          while value.include? "{{"
+            val_to_replace = value[/{{(.*?)}}/m, 1].strip
+            if hash.has_key?(val_to_replace)
+              new_value = hash[val_to_replace]
+              replaced_value = value.sub!(/{{.*?}}/, new_value.to_s)
+            else
+              break
+            end
+            value = replaced_value
+          end
+        end
+      end
+     end
+    return hash
+  end
+
   # param: target hash
   # param: be merged hash
   def self.merge_variables(vars, hash)
@@ -367,6 +388,7 @@ module AnsibleSpec
         vars.merge!(hash)
       end
     end
+    vars = resolve_include_statements(vars)
     return vars
   end
 
