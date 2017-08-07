@@ -66,37 +66,49 @@ module AnsibleSpec
       end
     }
 
+    # parent_hash maps a group to its parent group
+    parent_hash = Hash.new
+
     # parse children [group:children]
     search = Regexp.new(":children".to_s)
     groups.keys.each{|k|
       unless (k =~ search).nil?
         # get group parent & merge parent
-        groups.merge!(get_parent(groups,search,k))
+        h, parent_hash = get_parent(groups,search,k,parent_hash)
+        groups.merge!(h)
         # delete group children
         if groups.has_key?("#{k}") && groups.has_key?("#{k.gsub(search,'')}")
           groups.delete("#{k}")
         end
       end
     }
-    return groups
+    return groups, parent_hash
   end
 
   # param  hash   {"server"=>["192.168.0.103"], "databases"=>["192.168.0.104"], "pg:children"=>["server", "databases"]}
   # param  search ":children"
   # param  k      "pg:children"
   # return {"server"=>["192.168.0.103"], "databases"=>["192.168.0.104"], "pg"=>["192.168.0.103", "192.168.0.104"]}
-  def self.get_parent(hash,search,k)
+  def self.get_parent(hash,search,k,parent_hash)
     k_parent = k.gsub(search,'')
     arry = Array.new
     hash["#{k}"].each{|group|
       if (group.class != String)
         group = group["name"]
       end
+      if parent_hash[group].class == Array
+        parent_arr = parent_hash[group]
+        if not parent_arr.include? k_parent
+          parent_arr.push(k_parent)
+        end
+      else
+        parent_hash[group] = [k_parent]
+      end
       arry = arry + hash["#{group}"]
     }
     h = Hash.new
     h["#{k_parent}"] = arry
-    return h
+    return h, parent_hash
   end
 
   # param filename
@@ -349,15 +361,18 @@ module AnsibleSpec
           vars = load_vars_file(vars, f)
 	}
       else
-        yaml = YAML.load_file(vars_file)
-        vars = merge_variables(vars, yaml)
+        #Skip encrypted token files
+        if not vars_file.include? "encrypted"
+          yaml = YAML.load_file(vars_file)
+          vars = merge_variables(vars, yaml)
+        end
       end
     end
     return vars
   end
 
   # param: variable hash
-  def resolve_include_statements(hash)
+  def self.resolve_include_statements(hash)
     if hash.class == Hash
       hash.each do |key, value|
         if value.class == String
@@ -388,7 +403,7 @@ module AnsibleSpec
         vars.merge!(hash)
       end
     end
-    vars = resolve_include_statements(vars)
+    vars = self.resolve_include_statements(vars)
     return vars
   end
 
@@ -398,7 +413,7 @@ module AnsibleSpec
     playbook, inventoryfile = load_ansiblespec
 
     # load inventory file and playbook hosts mapping
-    hosts = load_targets(inventoryfile)
+    hosts, parent_hash = load_targets(inventoryfile)
     properties = load_playbook(playbook)
     properties.each do |var|
       var["hosts_childrens"] = hosts["hosts_childrens"]
@@ -425,7 +440,7 @@ module AnsibleSpec
         var["hosts"] = []
       end
     end
-    return properties
+    return properties, parent_hash
   end
 
   # param: none
@@ -453,9 +468,19 @@ module AnsibleSpec
       target_host.keys[0]
   end
 
+  def self.get_groups_variables(vars, curr_group, parent_hash, vars_dirs_path)
+    if parent_hash.has_key?(curr_group)
+      parent_hash[curr_group].each do |group|
+        get_groups_variables(vars, group, parent_hash, vars_dirs_path)
+      end
+    end
+    vars = load_vars_file(vars ,"#{vars_dirs_path}group_vars/#{curr_group}", true)
+    return vars
+  end
+
   def self.get_variables(host, group_idx, hosts=nil)
     vars = {}
-    p = self.get_properties
+    p, parent_hash = self.get_properties
 
     # roles default
     p[group_idx]['roles'].each do |role|
@@ -473,7 +498,7 @@ module AnsibleSpec
 
     # each group vars
     if p[group_idx].has_key?('group')
-      vars = load_vars_file(vars ,"#{vars_dirs_path}group_vars/#{p[group_idx]['group']}", true)
+      vars = get_groups_variables(vars, p[group_idx]['group'], parent_hash, vars_dirs_path)
     end
 
     # each host vars
