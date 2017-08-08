@@ -88,14 +88,20 @@ module AnsibleSpec
   # param  hash   {"server"=>["192.168.0.103"], "databases"=>["192.168.0.104"], "pg:children"=>["server", "databases"]}
   # param  search ":children"
   # param  k      "pg:children"
+  # param  parent_hash {"host1"=>["atlanta"], "host2"=>["raleigh"], "atlanta"=>["southeast", "south"], "raleigh"=>["southeast"]} 
+  #
   # return {"server"=>["192.168.0.103"], "databases"=>["192.168.0.104"], "pg"=>["192.168.0.103", "192.168.0.104"]}
+  # return {"host1"=>["atlanta"], "host2"=>["raleigh"], "atlanta"=>["southeast", "south"], "raleigh"=>["southeast"], "southeast"=>["usa"], "south"=>["usa"]}
   def self.get_parent(hash,search,k,parent_hash)
     k_parent = k.gsub(search,'')
     arry = Array.new
     hash["#{k}"].each{|group|
+      # If group is a hash, just use the name of the group
       if (group.class != String)
         group = group["name"]
       end
+
+      # Add group to parent_hash i.e. parent_hash['group_name']=>['parent_name', 'another_parent_name']  
       if parent_hash[group].class == Array
         parent_arr = parent_hash[group]
         if not parent_arr.include? k_parent
@@ -104,6 +110,8 @@ module AnsibleSpec
       else
         parent_hash[group] = [k_parent]
       end
+      
+      # Add to hosts in "pg:children" to arry
       arry = arry + hash["#{group}"]
     }
     h = Hash.new
@@ -372,7 +380,13 @@ module AnsibleSpec
   end
 
   # param: variable hash
-  def self.resolve_include_statements(hash)
+  # 
+  # e.g. 
+  # - name: {{item}}
+  # - item: test
+  #
+  # return {'name'=>'test', 'item'=>'test'}
+  def self.loop_through_vars(hash)
     if hash.class == Hash
       hash.each do |key, value|
         if value.class == String
@@ -403,7 +417,8 @@ module AnsibleSpec
         vars.merge!(hash)
       end
     end
-    vars = self.resolve_include_statements(vars)
+    # get rid of any loops in vars
+    vars = self.loop_through_vars(vars)
     return vars
   end
 
@@ -468,6 +483,23 @@ module AnsibleSpec
       target_host.keys[0]
   end
 
+  # param: vars hash
+  # param: name of the current group for which you want to get the variables
+  # param: parent hash
+  #        e.g. {"host1"=>["atlanta"], "host2"=>["raleigh"], "atlanta"=>["southeast", "south"], "raleigh"=>["southeast"]}
+  # param: vars_dirs_path
+  #
+  # recursive method to get all varibles of a group and all its parents
+  #        e.g. curr_group = host1
+  #             curr_group = atlanta
+  #             curr_group = southeast
+  #             curr_group = south
+  #             load_vars_file for south
+  #             load_vars_file for southeast
+  #             load_vars_file for atlanta
+  #             load_vars_file for host1
+  #
+  # return vars hash
   def self.get_groups_variables(vars, curr_group, parent_hash, vars_dirs_path)
     if parent_hash.has_key?(curr_group)
       parent_hash[curr_group].each do |group|
